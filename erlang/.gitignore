@@ -1,0 +1,4 @@
+deps
+ebin
+include
+src/*.proto
