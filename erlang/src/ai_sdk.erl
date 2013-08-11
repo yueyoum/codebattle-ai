@@ -225,11 +225,9 @@ senceupdate({senceupdate, Own, Others} = Data, #state{worker=Worker} = State) ->
     {ok, State}.
 
 startbattle(#state{worker=Worker} = State) ->
-    io:format("startbattle!~n"),
     gen_server:cast(Worker, startbattle),
     {ok, State}.
 
 endbattle(EndBattle, #state{worker=Worker} = State) ->
-    io:format("endbattle~n"),
     gen_server:cast(Worker, EndBattle),
     {ok, State}.

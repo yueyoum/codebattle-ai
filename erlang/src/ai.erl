@@ -3,8 +3,8 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1,
-         start_link/2,
+-export([start_link/3,
+         start_link/4,
          own_marine_ids/1,
          other_marine_ids/1,
          call_move/4,
@@ -44,11 +44,11 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(RoomId) ->
-    gen_server:start_link(?MODULE, [RoomId, "red"], []).
+start_link(Ip, Port, RoomId) ->
+    gen_server:start_link(?MODULE, [Ip, Port, RoomId, "red"], []).
 
-start_link(RoomId, Color) ->
-    gen_server:start_link(?MODULE, [RoomId, Color], []).
+start_link(Ip, Port, RoomId, Color) ->
+    gen_server:start_link(?MODULE, [Ip, Port, RoomId, Color], []).
 
 own_marine_ids(Pid) ->
     gen_server:call(Pid, own_marine_ids).
@@ -80,12 +80,10 @@ call_gunshoot(Pid, MarineId, X, Z) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([RoomId, Color]) ->
+init([IP, Port, RoomId, Color]) ->
     <<A:32, B:32, C:32>> = crypto:strong_rand_bytes(12),
     random:seed({A, B, C}),
     {ok, SdkPid} = ai_sdk:start_link(self()),
-    IP = {127, 0, 0, 1},
-    Port = 8888,
 
     {ok, _Sock} = ai_sdk:connect(SdkPid, IP, Port),
 
@@ -109,10 +107,6 @@ init([RoomId, Color]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-
-% handle_call(_Request, _From, State) ->
-%     {reply, ok, State}.
-
 handle_call(own_marine_ids, _From, #state{own=Own} = State) ->
     {reply, dict:fetch_keys(Own), State};
 
@@ -167,7 +161,6 @@ handle_cast({joinroomresponse, _RoomId, {vector2int, X, Z}, Marines}, State) ->
         dict:store(RM#marine.id, RM, D)
     end,
     Own = lists:foldl(Fun, dict:new(), Marines),
-    io:format("joinroomresponse, Marines = ~p~n", [Own]),
     {noreply, State#state{mapx=X, mapz=Z, own=Own}};
 
 
@@ -196,12 +189,14 @@ handle_cast({endbattle, Reason, Win}, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_info(timeout, #state{sdk=Sdk, own=Own} = State) ->
+handle_info(timeout, #state{sdk=Sdk, own=Own, others=OthersMarines} = State) ->
     io:format("ai timeout, start Flares~n"),
 
     case choose_flares_id(Own) of
         undefined ->
-            io:format("NO Flares Any More!!!~n");
+            io:format("NO Flares Any More!!!~n"),
+            %% make random shoot
+            all_attack(Own, OthersMarines, Sdk);
         Id ->
             flares(Sdk, Id)
     end,
@@ -239,17 +234,22 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 
-action(OwnMarines, OthersMarines, #state{sdk=Sdk, own=Own, others=Others} = State) ->
+action(OwnMarines, OthersMarines, #state{own=Own, others=Others} = State) ->
     %% Update Marine first
-    UpdateFun = fun({marine, Id, _, _, _, _, _, _} = M, D) ->
-        NewM =
-        case dict:is_key(Id, D) of
-            true ->
-                update_marine_record(M, dict:fetch(Id, D));
-            false ->
-                make_new_marine_record(M)
-        end,
-        dict:store(Id, NewM, D)
+    UpdateFun = fun({marine, Id, _, _, Status, _, _, _} = M, D) ->
+        case Status of
+            'Dead' ->
+                dict:erase(Id, D);
+            _ ->
+                NewM =
+                case dict:is_key(Id, D) of
+                    true ->
+                        update_marine_record(M, dict:fetch(Id, D));
+                    false ->
+                        make_new_marine_record(M)
+                end,
+                dict:store(Id, NewM, D)
+        end
     end,
 
     NewOwn = lists:foldl(UpdateFun, Own, OwnMarines),
@@ -260,30 +260,28 @@ action(OwnMarines, OthersMarines, #state{sdk=Sdk, own=Own, others=Others} = Stat
     %% If got OthersMarines here, 
     %% means either you have Flares just now,
     %% or it should be others doing Flares, GunAttack,
-    %% or others has been hitted,
-    %% or others has hitted any other marines.
-    io:format("Own ids = ~p~n", [dict:fetch_keys(NewOwn)]),
+    %% or bullet hitted some marine
 
     case length(OthersMarines) of
-        0 -> action_no_others(NewOwn, NewState);
+        0 -> action_no_others(NewState);
         _ ->
             case is_flares(NewOwn) of
                 true ->
-                    action_after_own_flares(NewOwn, NewOthers, NewState);
+                    action_after_own_flares(NewState);
                 false ->
                     case is_flares(NewOthers) of
                         true ->
-                            action_after_others_flares(NewOwn, NewOthers, NewState);
+                            action_after_others_flares(NewState);
                         false ->
                             case is_gunattack(NewOthers) of
                                 true ->
-                                    action_after_others_shoot(NewOwn, NewOthers, NewState);
+                                    action_after_others_shoot(NewState);
                                 false ->
                                     case is_bullet_hitted(NewOthers) of
                                         true -> 
-                                            action_after_bullet_hitted(NewOwn, NewOthers, NewState);
+                                            action_after_bullet_hitted(NewState);
                                         false ->
-                                            action_after_own_flares_2(NewOwn, NewOthers, NewState)
+                                            action_after_own_flares_2(NewState)
                                     end
                             end
                     end
@@ -292,34 +290,42 @@ action(OwnMarines, OthersMarines, #state{sdk=Sdk, own=Own, others=Others} = Stat
 
 
 
-action_no_others(OwnMarines, State) ->
-    io:format("No OthersMarines~n"),
+action_no_others(State) ->
+    %% no others marines
+    %% either your marine status change Run to Idle, then report you this marine's latest state
+    %% or bullet hitted some marine, your marine is Attack or Injured.
+    %% you can check out this via Marine's role field.
     State.
 
-action_after_own_flares(OwnMarines, OthersMarines, #state{sdk=Sdk} = State) ->
-    %% Own Marines Flares, then I got all Marines in the battle.
+action_after_own_flares(#state{sdk=Sdk, own=OwnMarines, others=OthersMarines} = State) ->
+    %% Own Marines Flares, then I got all Marines in the sence.
     %% you can hold you fire and waiting the incoming message at next 1 senconds.
     %% so you can calculate others marines  run position via the two state.
-    io:format("Got OthersMarines, due to I have Flares just now~n"),
+    AttackingMarines = all_attack(OwnMarines, OthersMarines, Sdk),
+    UpdateGunShootTime = fun(#marine{id=Id}, D) ->
+        M = dict:fetch(Id, D),
+        NewM = M#marine{gunlasttime = calendar:now_to_datetime(now())},
+        dict:store(Id, NewM, D)
+    end,
+    NewOwn = lists:foldl(UpdateGunShootTime, OwnMarines, AttackingMarines),
+    State#state{own=NewOwn, flares_state=OthersMarines}.
 
-    % all_move(OwnMarines, Sdk),
-    all_attack(OwnMarines, OthersMarines, Sdk),
-    State#state{flares_state=OthersMarines}.
-
-action_after_others_flares(OwnMarines, OthersMarines, #state{sdk=Sdk} = State) ->
+action_after_others_flares(State) ->
     %% Other Marines Flares, So He knew my state
     %% Don't worry about this, We can Idel here and waiting for he's GunAttack action.
-    io:format("Got OthersMarines, Other Flares~n"),
     State.
 
-action_after_own_flares_2(OwnMarines, OthersMarines, #state{sdk=Sdk, flares_state=FS} = State) ->
+action_after_own_flares_2(State) ->
     %% need some calculate.
-    io:format("Got Flares_2, Ignored...~n"),
+    %% you have other marine's two states, and the two state's interval is 1 seconds.
+    %% so you can calculate other marines run direction,
+    %% and the distance between your marine and other marine,
+    %% and also calculate the bullet flying speed.
+    %% you can make an accurate attack, if other marine not turn to.
     State.
 
-action_after_others_shoot(OwnMarines, OthersMarines, #state{own=Own, sdk=Sdk} = State) ->
+action_after_others_shoot(#state{own=OwnMarines, others=OthersMarines, sdk=Sdk} = State) ->
     %% Other Marines Shoot, He didn't know My state right now.
-    io:format("Got OthersMarines, Other GunAttack~n"),
     AttackingMarines = all_attack(OwnMarines, OthersMarines, Sdk),
     UpdateGunShootTime = fun(#marine{id=Id}, D) ->
         M = dict:fetch(Id, D),
@@ -327,12 +333,11 @@ action_after_others_shoot(OwnMarines, OthersMarines, #state{own=Own, sdk=Sdk} = 
         dict:store(Id, NewM, D)
     end,
 
-    NewOwn = lists:foldl(UpdateGunShootTime, Own, AttackingMarines),
-    State.
+    NewOwn = lists:foldl(UpdateGunShootTime, OwnMarines, AttackingMarines),
+    State#state{own=NewOwn}.
 
-action_after_bullet_hitted(OwnMarines, OthersMarines, State) ->
+action_after_bullet_hitted(State) ->
     %% Buttle has hitted some marine.
-    io:format("Got OthersMarines, Bullet Hitted~n"),
     State.
 
 
@@ -351,7 +356,6 @@ is_bullet_hitted(Mdict) ->
 marines_test(Mdict, Fun) ->
     L = [V || {_, V} <- dict:to_list(Mdict)],
     lists:any(Fun, L).
-
 
 
 
@@ -385,7 +389,8 @@ all_attack(OwnMarines, OthersMarines, Sdk) ->
             all_move(OwnMarines, Sdk),
             [];
         AttackingMarines ->
-            Target = choose_marine_random(OthersMarines),
+            % Target = choose_marine_by_random(OthersMarines),
+            Target = choose_marine_by_distance(AttackingMarines, OthersMarines),
             Fun = fun(#marine{id=Id}) ->
                 gun_attack_and_run(Sdk,
                                    Id,
@@ -400,7 +405,7 @@ all_attack(OwnMarines, OthersMarines, Sdk) ->
 
 
 
-update_marine_record({marine, Id, Hp, {vector2, X, Z}, Status, _, FlaresAmount, Role}, M) ->
+update_marine_record({marine, _Id, Hp, {vector2, X, Z}, Status, _, FlaresAmount, Role}, M) ->
     M#marine{hp=Hp, position=#vector2{x=X, z=Z}, status=Status, flares=FlaresAmount, role=Role}.
 
 make_new_marine_record({marine, Id, Hp, {vector2, X, Z}, Status, _, FlaresAmount, Role}) ->
@@ -412,7 +417,7 @@ choose_flares_id(OwnMarines) ->
     %% or two or more have flares, choose one which has more hp
     %% or no one has flares, return undefined
 
-    HasFlares = lists:filter(fun(#marine{flares=FlaresAmount}=M) -> FlaresAmount > 0 end,
+    HasFlares = lists:filter(fun(#marine{flares=FlaresAmount}) -> FlaresAmount > 0 end,
         [V || {_, V} <- dict:to_list(OwnMarines)]
         ),
 
@@ -446,7 +451,7 @@ can_make_gun_shoot(GunLastTime) ->
     end.
 
 
-choose_marine_random(Ms) ->
+choose_marine_by_random(Ms) ->
     L = dict:to_list(Ms),
     {_, M} = lists:nth(random:uniform(length(L)), L),
     M.
@@ -454,5 +459,30 @@ choose_marine_random(Ms) ->
 choose_marine_by_hp(Ms) ->
     L = [V || {_, V} <- dict:to_list(Ms)],
     Fun = fun(M1, M2) -> M1#marine.hp =< M2#marine.hp end,
-    HpMs = lists:sort(Fun, Ms),
+    HpMs = lists:sort(Fun, L),
     lists:nth(1, HpMs).
+
+
+choose_marine_by_distance(Own, Others) ->
+    L = [V || {_, V} <- dict:to_list(Others)],
+    DistanceFun = fun(AX, AZ, BX, BZ) ->
+        D = math:pow((AX-BX), 2) + math:pow((AZ-BZ), 2),
+        math:sqrt(D)
+    end,
+
+    OneOtherDisFun = fun(#marine{position=#vector2{x=X, z=Z}}) ->
+        lists:min(
+        [DistanceFun(X, Z, MX, MZ) || #marine{position=#vector2{x=MX, z=MZ}} <- Own]
+        )
+    end,
+
+    OtherMinList = [OneOtherDisFun(M) || M <- L],
+
+    Nth = string:str(OtherMinList, [lists:min(OtherMinList)]),
+    lists:nth(Nth, L).
+
+
+
+
+
+
