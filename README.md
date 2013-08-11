@@ -1,5 +1,11 @@
 # CodeBattle AI
 
+*   [codebattle-server][20]
+*   [codebattle-proto][21]
+*   [codebattle-ai][22]
+*   [codebattle-client][23]
+
+
 CodeBattle 这个项目诞生的初衷就是让程序员写AI控制游戏场景中的角色，进行对战。
 
 这里提供一些AI的例子，你可以参考这里的例子来完成自己NB的AI，在写自己AI的时候，可以把这些例子AI作为对手，当你的AI战胜示例AI后，你就可以和你的好基友一起来一场AI对战。
@@ -112,3 +118,7 @@ proto 消息在 上面的链接里有说明，这里说一下数据到底如何�
 [1]: https://github.com/yueyoum/codebattle-client
 [2]: http://www.soku.com/detail/show/XMTA4MDI2OA==
 [3]: https://github.com/yueyoum/codebattle-proto
+[20]: https://github.com/yueyoum/codebattle-server
+[21]: https://github.com/yueyoum/codebattle-proto
+[22]: https://github.com/yueyoum/codebattle-ai
+[23]: https://github.com/yueyoum/codebattle-client
