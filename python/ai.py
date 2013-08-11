@@ -1,3 +1,4 @@
+import sys
 import time
 import random
 
@@ -85,6 +86,7 @@ class AI(Sdk):
 
     def endbattle(self, data):
         print "Endbattle, reason = {0}, win = {1}".format(data.reason, data.win)
+        sys.exit(0)
 
 
     def choose_flares_id(self):

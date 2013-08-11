@@ -13,7 +13,9 @@ class Sdk(object):
     def __init__(self, ip, port, roomid, color="red"):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((ip, port))
-        self.sock.sendall(cmd_joinroom(roomid, color))
+
+        self.roomid = roomid
+        self.color = color
 
         self.last_receive_time = time.time()
         self.started = False
@@ -39,8 +41,6 @@ class Sdk(object):
 
             msg = api_pb2.Message()
             msg.ParseFromString(data)
-
-            print msg
 
             if msg.msg == api_pb2.cmdresponse:
                 if msg.response.ret != 0:
@@ -78,6 +78,7 @@ class Sdk(object):
         raise NotImplemented()
 
     def run(self):
+        self.sock.sendall(cmd_joinroom(self.roomid, self.color))
         recv_job = gevent.spawn(self.sock_recv)
         recv_checker_job = gevent.spawn(self.receive_checker)
         gevent.joinall([recv_job, recv_checker_job])
