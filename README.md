@@ -5,6 +5,7 @@
 *   [codebattle-ai][22]
 *   [codebattle-client][23]
 
+**ShowCase**  [youtube][25], [youku][24]
 
 CodeBattle 这个项目诞生的初衷就是让程序员写AI控制游戏场景中的角色，进行对战。
 
@@ -113,6 +114,62 @@ proto 消息在 上面的链接里有说明，这里说一下数据到底如何�
 
 同样，server返回的数据 也包含了 4 bytes 长度的数据头。 你首先从socket读4个字节，然后将大端序的二进制转换成本地整数。然后再次从socket中读取这个整数长度的数据，这样就得到了一个完整的数据包。 最后再用 Api.Message 来解析这个包即可。
 
+## AI操作示例
+
+这部分其实看本repo中的例子AI能更好的理解。
+
+1.  两个AI要进行对战，第一部是这两个AI加入同一个房间。
+
+    用 client[23] 建立建立一个房间后，（createroom)，
+    你在游戏场景的顶部便会看到此room id。
+
+2.  复制此room id，用作AI的初始化参数，告知AI应该加入哪个房间。
+
+    现在的示例AI，的初始化需要3或4个参数，IP, PORT, ROOMID, COLOR
+    
+    ip, port 为服务器IP 和 aiPort， ROOMID就是第一步得到的roomid，
+
+    COLOR 为你marines的颜色。不指定为 red
+    
+    可选颜色有 red, blue, yellow, green, cyan
+
+3.  当两个AI都加入后（目前版本只支持两个AI对战），你的AI会收到startbattle的消息。此时正式开始对战。在收到此消息前，你只能等待对方AI加入，你无法做任何操作。
+
+    如果你不给服务器发送任何消息， 10分钟后会销毁当前房间，关闭连接到此房间的所有ob 和 ai。
+
+4.  游戏刚开始的时候，你并不知道敌人的状态。 你要么主动发射Flares来探测敌人的状态，要么被动的等待敌人的动作，来获取其状态。
+
+    服务器会不停的把场景中marine状态的转换发送给你。比如
+
+    *   你主动获知敌人状态
+    *   敌人有Flares, GunAttack动作，你被动获取
+    *   你的marine从 run 状态 转变为idle状态
+    *   子弹命中
+    
+    所以无论你使用什么技术 (多线程，多进程，异步，协程, select, epoll 等等)，请确保 socket 的 收发 不会互相 block。
+
+    否则你将无法及时得知场景的变化。
+
+5.  直到有一方的marine全部死亡，或者到达10分钟的对战时间限制，或者某个AI断开连接，你都会收到endbattle消息。表明此战斗已经结束。从返回的 EndBattle.win 是 true 还是 false 可以表明的AI是胜利 还是 失败
+
+
+## Tips
+
+*   利用好Flares的两次汇报，能够加大打击对方的可能性。
+
+    两次汇报间隔1秒，你知道某个marine 1秒前后的两个位置，所以你可以计算出它的移动方向，再根据自己和它的位置，以及marine和子弹的移动速度，你可以计算出如果它不转向，在某坐标点，子弹将于其碰撞。
+
+*   两个marine都同时攻击对方的一个marine， 以增加命中概率
+
+*   优先攻击血少的marine，如果对方先死人，那么2打1的情况会好很多。
+
+*   如果有某个敌人和你很近，那么你可以优先攻击这个敌人
+
+    因为子弹的速度是marine的4倍，这种情况下必然命中。
+
+*   你的两个marine尽量分散开
+
+
 
 
 [1]: https://github.com/yueyoum/codebattle-client
@@ -122,3 +179,5 @@ proto 消息在 上面的链接里有说明，这里说一下数据到底如何�
 [21]: https://github.com/yueyoum/codebattle-proto
 [22]: https://github.com/yueyoum/codebattle-ai
 [23]: https://github.com/yueyoum/codebattle-client
+[24]: http://v.youku.com/v_show/id_XNTk0OTk2Mjg0.html
+[25]: http://www.youtube.com/watch?v=V6PkjlUXV6w&feature=youtu.be
